@@ -1,0 +1,46 @@
+#!/bin/bash
+#TODO: non-audio detection
+
+SPDIF_D="hw:2,0"
+USB_D="hw:1,0"
+HDMI_D="hw:0,0"
+FORMAT="-f S16_LE -c 2 --buffer-size=1024"
+STDERR_SINK=/dev/null
+
+dummy_rec() {
+    if [[ ! -z $(pgrep arecord) ]]; then
+        echo "already recording"
+    else
+	arecord -D $SPDIF_D -f cd -d 1 2>$STDERR_SINK
+    fi;
+}
+
+get_sample_rate() {
+dummy_rec | while read F; do 
+    cat /proc/asound/sndrpihifiberry/registers | 
+        grep "ind freq" | 
+        awk '{print $3*1000}'; 
+    break; 
+done;
+}
+
+dump_signal() {
+if [[ (! -z $1) && (! -z $2) && (! -z $3) ]]; then
+    SAMPLE_RATE=$3
+    if [[ ! -z $(pgrep zrecord) ]]; then
+        killall arecord
+    fi
+    arecord -D $([[ $1 == "SPDIF" ]] && echo $SPDIF_D)$([[ $1 == "USB" ]] && echo $USB_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK | 
+    aplay   -D $([[ $2 == "SPDIF" ]] && echo $SPDIF_D)$([[ $2 == "HDMI" ]] && echo $HDMI_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK
+fi
+}
+
+while true; do
+    SAMPLE_RATE_NEW=$(get_sample_rate)
+    if [[ -z $SAMPLE_RATE || !($SAMPLE_RATE_NEW == $SAMPLE_RATE) ]]; then
+	SAMPLE_RATE=$SAMPLE_RATE_NEW
+	echo "Switching to sample rate "$SAMPLE_RATE
+    	dump_signal $1 $2 $SAMPLE_RATE &
+    fi
+    sleep 1
+done

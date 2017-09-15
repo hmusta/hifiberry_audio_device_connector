@@ -6,7 +6,9 @@ USB_D="hw:1,0"
 HDMI_D="hw:0,0"
 FORMAT="-f S16_LE -c 2 --buffer-size=1024"
 STDERR_SINK=/dev/null
+QUERY_PERIOD=1
 
+#get sample rate by probing SPDIF input for one second
 dummy_rec() {
     if [[ ! -z $(pgrep arecord) ]]; then
         echo "already recording"
@@ -24,23 +26,30 @@ dummy_rec | while read F; do
 done;
 }
 
+#the actual signal dumper
 dump_signal() {
 if [[ (! -z $1) && (! -z $2) && (! -z $3) ]]; then
     SAMPLE_RATE=$3
-    if [[ ! -z $(pgrep zrecord) ]]; then
+    if [[ ! -z $(pgrep arecord) ]]; then
         killall arecord
+        killall aplay
+    	sleep 0.5
     fi
     arecord -D $([[ $1 == "SPDIF" ]] && echo $SPDIF_D)$([[ $1 == "USB" ]] && echo $USB_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK | 
-    aplay   -D $([[ $2 == "SPDIF" ]] && echo $SPDIF_D)$([[ $2 == "HDMI" ]] && echo $HDMI_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK
+    aplay   -D $([[ $2 == "SPDIF" ]] && echo $SPDIF_D)$([[ $2 == "HDMI" ]] && echo $HDMI_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK &
 fi
 }
 
+#main loop
 while true; do
     SAMPLE_RATE_NEW=$(get_sample_rate)
     if [[ -z $SAMPLE_RATE || !($SAMPLE_RATE_NEW == $SAMPLE_RATE) ]]; then
 	SAMPLE_RATE=$SAMPLE_RATE_NEW
-	echo "Switching to sample rate "$SAMPLE_RATE
-    	dump_signal $1 $2 $SAMPLE_RATE &
+	if [[ ! -z $SAMPLE_RATE ]]; then
+	    echo "Switching to sample rate "$SAMPLE_RATE
+    	    dump_signal $1 $2 $SAMPLE_RATE
+	fi
     fi
-    sleep 1
+    sleep $QUERY_PERIOD
 done
+

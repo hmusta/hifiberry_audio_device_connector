@@ -1,54 +1,75 @@
 #!/bin/bash
-#TODO: non-audio detection
 
 SPDIF_D="hw:2,0"
 USB_D="hw:1,0"
 HDMI_D="hw:0,0"
 FORMAT="-f S16_LE -c 2 --buffer-size=1024"
-STDERR_SINK=/dev/null
-QUERY_PERIOD=1
+#STDERR_SINK=""
+STDERR_SINK="/dev/null"
+QUERY_PERIOD=0.5
+REGFILE=/proc/asound/sndrpihifiberry/registers
 
 #get sample rate by probing SPDIF input for one second
 dummy_rec() {
     if [[ ! -z $(pgrep arecord) ]]; then
-        echo "already recording"
+        echo "Already recording"
     else
 	arecord -D $SPDIF_D -f cd -d 1 2>$STDERR_SINK
-    fi;
+    fi
 }
 
 get_sample_rate() {
-dummy_rec | while read F; do 
-    cat /proc/asound/sndrpihifiberry/registers | 
-        grep "ind freq" | 
-        awk '{print $3*1000}'; 
-    break; 
-done;
+    dummy_rec | while read F; do 
+        cat $REGFILE | 
+            awk '$0~/ind freq/{print $3*1000}$0~/intstat/{print $2}'; 
+        break; 
+    done;
+}
+
+reset_dump() {
+    if [[ ! -z $(pgrep arecord) ]]; then
+        killall arecord
+        killall aplay
+        sleep $QUERY_PERIOD
+    fi
 }
 
 #the actual signal dumper
 dump_signal() {
-if [[ (! -z $1) && (! -z $2) && (! -z $3) ]]; then
-    SAMPLE_RATE=$3
-    if [[ ! -z $(pgrep arecord) ]]; then
-        killall arecord
-        killall aplay
-    	sleep 0.5
+    if [[ (! -z $1) ]]; then
+        SAMPLE_RATE=$1
+        reset_dump
+        arecord -D $SPDIF_D -r $SAMPLE_RATE $FORMAT 2>/dev/null | aplay -D $SPDIF_D -r $SAMPLE_RATE $FORMAT 2>/dev/null &
     fi
-    arecord -D $([[ $1 == "SPDIF" ]] && echo $SPDIF_D)$([[ $1 == "USB" ]] && echo $USB_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK | 
-    aplay   -D $([[ $2 == "SPDIF" ]] && echo $SPDIF_D)$([[ $2 == "HDMI" ]] && echo $HDMI_D) -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK &
-fi
 }
 
 #main loop
 while true; do
     SAMPLE_RATE_NEW=$(get_sample_rate)
-    if [[ -z $SAMPLE_RATE || !($SAMPLE_RATE_NEW == $SAMPLE_RATE) ]]; then
-	SAMPLE_RATE=$SAMPLE_RATE_NEW
-	if [[ ! -z $SAMPLE_RATE ]]; then
-	    echo "Switching to sample rate "$SAMPLE_RATE
-    	    dump_signal $1 $2 $SAMPLE_RATE
-	fi
+    if [[ $(echo "$SAMPLE_RATE_NEW" | wc -l) == 2 ]]; then
+        INTSTAT=$(echo "$SAMPLE_RATE_NEW" | head -n 2 | tail -n 1)
+        SAMPLE_RATE_NEW=$(echo "$SAMPLE_RATE_NEW" | head -n 1)
+        if [[ -z $SAMPLE_RATE || !($SAMPLE_RATE_NEW == $SAMPLE_RATE) || !($INTSTAT == "0x00") ]]; then
+            if [[ !($INTSTAT == "0x00") ]]; then
+                while [[ $SAMPLE_RATE == $SAMPLE_RATE_NEW ]]; do
+            	reset_dump
+            	SAMPLE_RATE_NEW=$(get_sample_rate)
+            	INTSTAT=$(echo "$SAMPLE_RATE_NEW" | head -n 2 | tail -n 1)
+               	SAMPLE_RATE_NEW=$(echo "$SAMPLE_RATE_NEW" | head -n 1)
+            	echo $SAMPLE_RATE_NEW $INTSTAT
+                done
+            fi
+        	if [[ !(-z $SAMPLE_RATE_NEW) && !($SAMPLE_RATE_NEW == $SAMPLE_RATE) ]]; then
+        	    SAMPLE_RATE=$SAMPLE_RATE_NEW
+        	    echo "Switching to sample rate "$SAMPLE_RATE" "$FORMAT" device: "$SPDIF_D
+            	    dump_signal $SAMPLE_RATE
+        	    while [[ !($INTSTAT == "0x00") ]]; do
+                        INTSTAT=$(get_sample_rate | head -n 2 | tail -n 1)
+        		echo $INTSTAT
+        	    done
+        	    echo "LOCKED"
+        	fi;
+        fi
     fi
     sleep $QUERY_PERIOD
 done

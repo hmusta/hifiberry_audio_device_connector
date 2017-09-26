@@ -4,34 +4,43 @@ SPDIF_D="hw:2,0"
 USB_D="hw:1,0"
 HDMI_D="hw:0,0"
 FORMAT="-f S16_LE -c 2 --buffer-size=1024"
-#STDERR_SINK=""
 STDERR_SINK="/dev/null"
+#STDERR_SINK="/dev/stderr"
 QUERY_PERIOD=0.5
 REGFILE=/proc/asound/sndrpihifiberry/registers
+
+#try to terminate them. if that doesn't work, kill
+reset_dump() {
+    if [[ !(-z $(pgrep arecord) && -z $(pgrep aplay)) ]]; then
+        killall arecord >$STDERR_SINK 2>&1
+        killall aplay >$STDERR_SINK 2>&1
+    fi
+    sleep $QUERY_PERIOD
+    while [[ !(-z $(pgrep arecord) && -z $(pgrep aplay)) ]]; do
+        killall -9 arecord >$STDERR_SINK 2>&1
+        killall -9 aplay >$STDERR_SINK 2>&1
+    done
+}
+
 
 #get sample rate by probing SPDIF input for one second
 dummy_rec() {
     if [[ ! -z $(pgrep arecord) ]]; then
         echo "Already recording"
+        echo "Already recording" 2>$STDERR_SINK
     else
-	arecord -D $SPDIF_D -f cd -d 1 2>$STDERR_SINK
+        arecord -D $SPDIF_D -f cd -d 1 2>$STDERR_SINK
     fi
 }
 
 get_sample_rate() {
+    if [[ -z $1 ]]; then
+        reset_dump
+    fi
     dummy_rec | while read F; do 
-        cat $REGFILE | 
-            awk '$0~/ind freq/{print $3*1000}$0~/intstat/{print $2}'; 
+        cat $REGFILE | awk '$0~/ind freq/{print $3*1000}$0~/ lock/{print $2}$0~/intstat/{print $2}'; 
         break; 
     done;
-}
-
-reset_dump() {
-    if [[ ! -z $(pgrep arecord) ]]; then
-        killall arecord
-        killall aplay
-        sleep $QUERY_PERIOD
-    fi
 }
 
 #the actual signal dumper
@@ -39,36 +48,31 @@ dump_signal() {
     if [[ (! -z $1) ]]; then
         SAMPLE_RATE=$1
         reset_dump
-        arecord -D $SPDIF_D -r $SAMPLE_RATE $FORMAT 2>/dev/null | aplay -D $SPDIF_D -r $SAMPLE_RATE $FORMAT 2>/dev/null &
+        arecord -D $SPDIF_D -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK | aplay -D $SPDIF_D -r $SAMPLE_RATE $FORMAT 2>$STDERR_SINK &
     fi
+    sleep $QUERY_PERIOD
+    cat $REGFILE >$STDERR_SINK
 }
 
 #main loop
 while true; do
-    SAMPLE_RATE_NEW=$(get_sample_rate)
-    if [[ $(echo "$SAMPLE_RATE_NEW" | wc -l) == 2 ]]; then
-        INTSTAT=$(echo "$SAMPLE_RATE_NEW" | head -n 2 | tail -n 1)
-        SAMPLE_RATE_NEW=$(echo "$SAMPLE_RATE_NEW" | head -n 1)
-        if [[ -z $SAMPLE_RATE || !($SAMPLE_RATE_NEW == $SAMPLE_RATE) || !($INTSTAT == "0x00") ]]; then
-            if [[ !($INTSTAT == "0x00") ]]; then
-                while [[ $SAMPLE_RATE == $SAMPLE_RATE_NEW ]]; do
-            	reset_dump
-            	SAMPLE_RATE_NEW=$(get_sample_rate)
-            	INTSTAT=$(echo "$SAMPLE_RATE_NEW" | head -n 2 | tail -n 1)
-               	SAMPLE_RATE_NEW=$(echo "$SAMPLE_RATE_NEW" | head -n 1)
-            	echo $SAMPLE_RATE_NEW $INTSTAT
-                done
+    SAMPLE_RATE_NEW=$(get_sample_rate $SAMPLE_RATE)
+    if [[ $(echo "$SAMPLE_RATE_NEW" | wc -l) == 3 ]]; then
+        CLOCK=$(echo "$SAMPLE_RATE_NEW" | head -n 1)
+        INTSTAT=$(echo "$SAMPLE_RATE_NEW" | head -n 3 | tail -n 1)
+        SAMPLE_RATE_NEW=$(echo "$SAMPLE_RATE_NEW" | head -n 2 | tail -n 1)
+        echo A $SAMPLE_RATE $SAMPLE_RATE_NEW $CLOCK $INTSTAT $(($INTSTAT & 0xf8)) >$STDERR_SINK
+        if [[ !(-z $SAMPLE_RATE_NEW) ]]; then
+            if [[ -z $SAMPLE_RATE || !($SAMPLE_RATE_NEW == $SAMPLE_RATE) ]]; then
+                SAMPLE_RATE=$SAMPLE_RATE_NEW
+                echo "Switching to sample rate "$SAMPLE_RATE" "$FORMAT" device: "$SPDIF_D
+                dump_signal $SAMPLE_RATE
+            echo B $SAMPLE_RATE $SAMPLE_RATE_NEW $CLOCK $INTSTAT $(($INTSTAT & 0xf8)) >$STDERR_SINK
             fi
-        	if [[ !(-z $SAMPLE_RATE_NEW) && !($SAMPLE_RATE_NEW == $SAMPLE_RATE) ]]; then
-        	    SAMPLE_RATE=$SAMPLE_RATE_NEW
-        	    echo "Switching to sample rate "$SAMPLE_RATE" "$FORMAT" device: "$SPDIF_D
-            	    dump_signal $SAMPLE_RATE
-        	    while [[ !($INTSTAT == "0x00") ]]; do
-                        INTSTAT=$(get_sample_rate | head -n 2 | tail -n 1)
-        		echo $INTSTAT
-        	    done
-        	    echo "LOCKED"
-        	fi;
+            if [[ !($CLOCK == "ON") || ($(($INTSTAT & 0xf8)) == 8) ]]; then
+                echo $(($INTSTAT & 0xf8)) >$STDERR_SINK
+                unset SAMPLE_RATE
+            fi
         fi
     fi
     sleep $QUERY_PERIOD

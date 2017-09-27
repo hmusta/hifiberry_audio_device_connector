@@ -6,7 +6,7 @@ HDMI_D="hw:0,0"
 FORMAT="-f S16_LE -c 2 --buffer-size=1024"
 STDERR_SINK="/dev/null"
 #STDERR_SINK="/dev/stderr"
-QUERY_PERIOD=0.5
+QUERY_PERIOD=0.25
 REGFILE=/proc/asound/sndrpihifiberry/registers
 
 #try to terminate them. if that doesn't work, kill

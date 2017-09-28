@@ -1,0 +1,4 @@
+#!/bin/bash
+
+screen -d -S SPDIF -m /home/pi/hifiberry_connect_devices_audio/alsa-loop hw:2,0 hw:2,0
+screen -d -S USB   -m /home/pi/hifiberry_connect_devices_audio/alsa-loop hw:0,0 hw:1,0

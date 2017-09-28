@@ -30,7 +30,7 @@
 snd_pcm_t *playback_handle, *capture_handle;
 int buf[BUFSIZE * 2];
 
-static unsigned int format = SND_PCM_FORMAT_S32_LE;
+static unsigned int format = SND_PCM_FORMAT_S16_LE;
 
 static int open_stream(snd_pcm_t **handle, const char *name, int dir, unsigned int rate)
 {
@@ -220,8 +220,12 @@ int main(int argc, char *argv[])
 	int err;
 
     unsigned int rate = DEFAULTSR;
-    char pdevice[] = "hw:2,0";
-    char cdevice[] = "hw:2,0";
+    if (argc < 3) {
+        fprintf(stderr, "Please specify an input and output device\n");
+        return 1;
+    }
+    char *pdevice = argv[1];
+    char *cdevice = argv[2];
 
     if ((err = start_pcm(rate, pdevice, cdevice)) < 0)
         return err;
